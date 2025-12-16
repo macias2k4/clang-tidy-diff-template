@@ -1,0 +1,39 @@
+name: clang-tidy (diff only)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  clang-tidy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install clang-tidy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tidy
+
+      - name: Configure project
+        run: |
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Locate clang-tidy-diff.py
+        id: tidy_diff
+        run: |
+          TIDY_DIFF=$(find /usr -type f -path "*/share/clang/clang-tidy-diff.py" 2>/dev/null | head -n 1)
+          if [ -z "$TIDY_DIFF" ]; then
+            echo "Error: clang-tidy-diff.py script not found."
+            exit 1
+          fi
+          echo "clang_tidy_diff=$TIDY_DIFF" >> $GITHUB_OUTPUT
+
+      - name: Run clang-tidy on changed lines
+        run: |
+          git diff origin/${{ github.base_ref }}... \
+            | ${{ steps.tidy_diff.outputs.clang_tidy_diff }} -p1 -path build
