@@ -4,5 +4,7 @@ Checks: >
   performance-*,
   readability-*,
   modernize-*,
-  cppcoreguidelines-*
+  -modernize-use-trailing-return-type,
+  cppcoreguidelines-*,
+  misc-include-cleaner
 WarningsAsErrors: ''
