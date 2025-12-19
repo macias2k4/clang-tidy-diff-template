@@ -1,0 +1,61 @@
+name: clang-tidy-diff-reviewdog
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  clang-tidy-diff-reviewdog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-tidy
+
+      - name: Configure CMake (generate compile_commands.json)
+        run: |
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Setup reviewdog
+        uses: reviewdog/action-setup@v1
+
+      - name: Locate clang-tidy-diff.py
+        id: tidy_diff
+        run: |
+          TIDY_DIFF=$(find /usr/lib/llvm-* -type f -path "*/share/clang/clang-tidy-diff.py" 2>/dev/null | head -n 1)
+          if [ -z "$TIDY_DIFF" ]; then
+            echo "Error: clang-tidy-diff.py script not found."
+            exit 1
+          fi
+          echo "clang_tidy_diff=$TIDY_DIFF" >> $GITHUB_OUTPUT
+
+      - name: Run clang-tidy-diff with reviewdog
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git diff -U0 origin/${{ github.base_ref }}... \
+            | ${{ steps.tidy_diff.outputs.clang_tidy_diff }} -p1 -path build \
+            | reviewdog \
+              -name="clang-tidy" \
+              -reporter=github-pr-review \
+              -filter-mode=diff_context \
+              -efm="%f:%l:%c: %trror: %m" \
+              -efm="%f:%l:%c: %tarning: %m" \
+              -efm="%f:%l:%c: %tote: %m"
+
+      # If you don't want to see warnings returned by clang-tidy as comments in your PR,
+      # replace the previous step with this one
+      # - name: Run clang-tidy on changed lines
+      #   run: |
+      #     git diff origin/${{ github.base_ref }}... \
+      #       | ${{ steps.tidy_diff.outputs.clang_tidy_diff }} -p1 -path build

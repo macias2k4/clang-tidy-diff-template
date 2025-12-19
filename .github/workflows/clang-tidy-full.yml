@@ -1,0 +1,137 @@
+name: clang-tidy-full
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 1 * *'
+
+permissions:
+  contents: read
+
+jobs:
+  clang-tidy-full:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang-tidy python3-pip
+          pip3 install clang-html
+
+      - name: Configure CMake (generate compile_commands.json)
+        run: |
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Restore clang-tidy trend cache
+        uses: actions/cache@v4
+        with:
+          path: clang-tidy-trend
+          key: clang-tidy-trend
+
+      - name: Collect source files
+        run: |
+          find . -type f \
+            \( -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \) \
+            ! -path "./build/*" \
+            > sources.txt
+
+      - name: Run clang-tidy (full scan)
+        run: |
+          mkdir -p clang-tidy-report clang-tidy-trend
+
+          clang-tidy -p build $(cat sources.txt) \
+            > clang-tidy-report/clang-tidy.txt || true
+
+      - name: Count warnings
+        id: count
+        run: |
+          WARNINGS=$(grep -E "warning:" clang-tidy-report/clang-tidy.txt | wc -l)
+          echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+
+      - name: Update trend data
+        id: trend
+        run: |
+          TREND_FILE=clang-tidy-trend/trend.csv
+
+          PREV=$(test -f "$TREND_FILE" && tail -n 1 "$TREND_FILE" | cut -d',' -f3 || echo "")
+
+          if [ ! -f "$TREND_FILE" ]; then
+            echo "timestamp,commit,warnings" > "$TREND_FILE"
+          fi
+
+          echo "$(date -u +%Y-%m-%d),${GITHUB_SHA::7},${{ steps.count.outputs.warnings }}" >> "$TREND_FILE"
+
+          if [ -n "$PREV" ]; then
+            DELTA=$(( ${{ steps.count.outputs.warnings }} - PREV ))
+          else
+            DELTA=0
+          fi
+
+          echo "delta=$DELTA" >> $GITHUB_OUTPUT
+
+      - name: Generate Mermaid trend
+        run: |
+          echo '```mermaid' > trend.mmd
+          echo 'xychart-beta' >> trend.mmd
+          echo '  title "clang-tidy warnings trend"' >> trend.mmd
+          echo '  x-axis "run"' >> trend.mmd
+          echo '  y-axis "warnings"' >> trend.mmd
+
+          VALUES=$(tail -n +2 clang-tidy-trend/trend.csv | cut -d',' -f3 | tr '\n' ',' | sed 's/,$//')
+
+          if [ -n "$VALUES" ]; then
+            echo "  line [$VALUES]" >> trend.mmd
+          fi
+
+          echo '```' >> trend.mmd
+
+
+      - name: Generate HTML report
+        run: |
+          clang-tidy-html clang-tidy-report/clang-tidy.txt -o clang-tidy-report/html
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: clang-tidy-full-report
+          path: clang-tidy-report/html
+
+      - name: Upload trend data
+        uses: actions/upload-artifact@v4
+        with:
+          name: clang-tidy-trend
+          path: clang-tidy-trend
+
+      - name: Job summary (dashboard)
+        run: |
+          echo "## 🧹 Clang-Tidy – Full Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Number of warnings:** ${{ steps.count.outputs.warnings }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.trend.outputs.delta }}" -gt 0 ]; then
+            echo "**Change vs previous:** 🔺 +${{ steps.trend.outputs.delta }}" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.trend.outputs.delta }}" -lt 0 ]; then
+            echo "**Change vs previous:** 🟢 ${{ steps.trend.outputs.delta }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Change vs previous:** ➖ 0" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$(wc -l < clang-tidy-trend/trend.csv)" -gt 2 ]; then
+            echo "### 📈 Trend" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            cat trend.mmd >> $GITHUB_STEP_SUMMARY
+          else
+            echo "_Trend will be available after at least two runs._" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "📦 **Full interactive HTML report is available as an artifact:** \`clang-tidy-full-report\`" >> $GITHUB_STEP_SUMMARY
