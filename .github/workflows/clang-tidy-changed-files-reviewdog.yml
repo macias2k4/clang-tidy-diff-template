@@ -1,0 +1,59 @@
+name: clang-tidy-changed-files-reviewdog
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  clang-tidy-changed-files-reviewdog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            clang-tidy \
+            cmake
+
+      - name: Configure CMake (generate compile_commands.json)
+        run: |
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Setup reviewdog
+        uses: reviewdog/action-setup@v1
+
+      - name: Get changed files
+        id: files
+        run: |
+          FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -E '\.(c|cc|cpp|cxx|h|hpp|hxx)$' || true)
+
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Run clang-tidy with reviewdog
+        if: steps.files.outputs.files != ''
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          clang-tidy \
+            -p build \
+            ${{ steps.files.outputs.files }} \
+          | reviewdog \
+            -name="clang-tidy" \
+            -reporter=github-pr-review \
+            -filter-mode=diff_context \
+            -efm="%f:%l:%c: %trror: %m" \
+            -efm="%f:%l:%c: %tarning: %m" \
+            -efm="%f:%l:%c: %tote: %m"
