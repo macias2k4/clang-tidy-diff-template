@@ -72,10 +72,8 @@ jobs:
 
       - name: Generate HTML report
         run: |
-          pip3 install clang-tidy-html
-          clang-tidy-html \
-            clang-tidy-report/clang-tidy.txt \
-            -o clang-tidy-report/html
+          pip3 install clang-html
+          clang-tidy-html clang-tidy-report/clang-tidy.txt -o clang-tidy-report/html
 
       - name: Upload HTML report
         uses: actions/upload-artifact@v4
